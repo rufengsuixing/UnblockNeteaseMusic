@@ -70,3 +70,4 @@ dist/
 # es6 transformation
 browser/provider
 browser/cache.js
+*.bak
