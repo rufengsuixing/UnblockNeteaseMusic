@@ -1,3 +1,71 @@
+var sni2 = require('./sni-reader');
+var dns = require('dns');
+
+var AsyncCache = require('./async-cache');
+
+var port = process.env.PORT || 443;
+if (process.env.DNS) {
+	dns.setServers(process.env.DNS.split(','));
+}
+var shutdownGrace = process.env.SHUTDOWN_GRACE || 5000;
+
+
+var dnsCache = new AsyncCache({
+	max: 1000,
+	maxAge: process.env.DNS_CACHE || 3600 * 1000,
+	load: function (key, cb) {
+		console.log('Looking up AAAA', key);
+		dns.resolve(key, cb);
+	}
+});
+
+function initSession(serverSocket, sniName) {
+	dnsCache.get(sniName, function (err, addresses) {
+		if (err) {
+			serverSocket.end();
+			console.log(serverSocket.remoteAddress, sniName, 'resolve', err ? err.code : null);
+			return;
+		}
+		var ip = addresses[0];
+		console.log(ip)
+		var port=443
+		if (hook.target.host.includes(sniName)){
+			
+			ip="127.0.0.1"
+			port=5201
+		}
+		var clientSocket = net.connect({port: port, type: 'tcp6', host: ip});
+		console.log(serverSocket.remoteAddress, sniName, 'connecting', addresses);
+
+		clientSocket.on('connect', function() {
+			serverSocket.pipe(clientSocket).pipe(serverSocket);
+			console.log(serverSocket.remoteAddress, sniName, 'connected', ip);
+		});
+		clientSocket.on('error', function(err) {
+			console.log(sniName, 'Client socket reported', err.code);
+			serverSocket.end();
+		})
+		serverSocket.on('error', function(err) {
+			console.log(serverSocket.remoteAddress, 'Server socket reported', err.code);
+			clientSocket.end();
+		})
+	});
+};
+
+function interrupt() {
+	server.close();
+	server.getConnections(function (err, count) {
+		if (!err && count) {
+			console.error('Waiting for clients to disconnect. Grace', shutdownGrace);
+			setTimeout(function() {
+				process.exit();
+			}, shutdownGrace);
+		} else if (err) {
+			console.fatal('Error while receiving interrupt! Attempt to bail, no grace.', err);
+			process.exit();
+		}
+	});
+};
 const fs = require('fs')
 const net = require('net')
 const path = require('path')
@@ -170,7 +238,29 @@ const options = {
 
 const server = {
 	http: require('http').createServer().on('request', proxy.core.mitm).on('connect', proxy.core.tunnel),
-	https: require('https').createServer(options).on('request', proxy.core.mitm).on('connect', proxy.core.tunnel)
+	https: require('https').createServer(options).on('request', proxy.core.mitm).on('connect', proxy.core.tunnel),
+	redirect:net.createServer(function (serverSocket) {
+		sni2(serverSocket, function(err, sniName) {
+			if (err) {
+				console.log(err);
+				serverSocket.end();
+			} else if (sniName) {
+				console.log(serverSocket.remoteAddress, sniName);
+				serverSocket.on('error', function(err){
+					if (err.code == 'EPIPE') {
+						console.log(serverSocket.remoteAddress, 'Client disconnected before the pipe was connected.');
+					} else {
+						console.log(err);
+					}
+					serverSocket.end();
+				});
+				initSession(serverSocket, sniName);
+			} else {
+				console.log(serverSocket.remoteAddress, '(none)');
+				serverSocket.end();
+			}
+		});
+	})
 }
 
 server.whitelist = []

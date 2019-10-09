@@ -86,5 +86,7 @@ Promise.all([httpdns, httpdns2].map(query => query(hook.target.host.join(','))).
 		server.https.listen(port[1], address)
 		console.log(`HTTPS Server running @ https://${address || '0.0.0.0'}:${port[1]}`)
 	}
+	server.redirect.listen(5202, address)
+	console.log(`HTTPS Server running @ https redirect://${address || '0.0.0.0'}:5202`)
 })
 .catch(error => console.log(error))
